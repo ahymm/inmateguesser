@@ -51,65 +51,49 @@ app.post("/random-case", async (req, res) => {
       "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     );
 
-    // ── STEP 1: Go to the search form ────────────────────────────────────────
+    // ── STEP 1: Set the disclaimer cookie BEFORE navigating ───────────────────
+    // cookie_form.js checks for this cookie to show the search form
+    await page.setCookie({
+      name: "disclaimer",
+      value: "accepted",
+      domain: "services.gdc.ga.gov",
+      path: "/",
+    });
+    await page.setCookie({
+      name: "gdcCookie",
+      value: "true",
+      domain: "services.gdc.ga.gov",
+      path: "/",
+    });
+    await page.setCookie({
+      name: "GDCcookie",
+      value: "true",
+      domain: "services.gdc.ga.gov",
+      path: "/",
+    });
+
+    // ── STEP 2: Navigate and wait for JS to fully execute ─────────────────────
     await page.goto(
       "https://services.gdc.ga.gov/GDC/OffenderQuery/jsp/OffQryForm.jsp",
-      { waitUntil: "domcontentloaded", timeout: 30000 }
+      { waitUntil: "networkidle2", timeout: 30000 }
     );
 
-    const url1   = page.url();
-    const title1 = await page.title();
-    console.log("After goto — URL:", url1);
-    console.log("After goto — Title:", title1);
+    // DEBUG: dump cookies and all input element IDs to find the real selectors
+    const cookies = await page.cookies();
+    console.log("All cookies:", JSON.stringify(cookies.map(c => ({ name: c.name, value: c.value }))));
 
-    // ── STEP 2: Handle disclaimer page if present ─────────────────────────────
-    const disclaimerSelectors = [
-      'input[value="I Agree"]',
-      'input[value="Agree"]',
-      'input[value="Accept"]',
-      'input[value="Continue"]',
-    ];
+    const inputs = await page.evaluate(() => {
+      return Array.from(document.querySelectorAll("input, select, textarea")).map(el => ({
+        tag:  el.tagName,
+        id:   el.id,
+        name: el.name,
+        type: el.type,
+        value: el.value,
+      }));
+    });
+    console.log("All form inputs found:", JSON.stringify(inputs, null, 2));
 
-    let clickedDisclaimer = false;
-    for (const sel of disclaimerSelectors) {
-      try {
-        const el = await page.$(sel);
-        if (el) {
-          console.log("Disclaimer found, clicking:", sel);
-          await Promise.all([
-            el.click(),
-            page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 20000 })
-          ]);
-          clickedDisclaimer = true;
-          break;
-        }
-      } catch (_) {}
-    }
-
-    if (!clickedDisclaimer) {
-      console.log("No disclaimer found — proceeding.");
-    }
-
-    const url2   = page.url();
-    const title2 = await page.title();
-    console.log("Post-disclaimer — URL:", url2);
-    console.log("Post-disclaimer — Title:", title2);
-
-    // ── STEP 3: If still not on form page, navigate directly ─────────────────
-    if (!url2.includes("OffQryForm")) {
-      console.log("Not on form page, navigating directly...");
-      await page.goto(
-        "https://services.gdc.ga.gov/GDC/OffenderQuery/jsp/OffQryForm.jsp",
-        { waitUntil: "domcontentloaded", timeout: 30000 }
-      );
-      console.log("Re-navigate URL:", page.url());
-    }
-
-    // DEBUG: dump HTML snippet so we can see what's on the page
-    const debugHtml = await page.content();
-    console.log("Page HTML (first 2000 chars):\n", debugHtml.substring(0, 2000));
-
-    // ── STEP 4: Fill the search form ─────────────────────────────────────────
+    // ── STEP 3: Wait for age inputs ───────────────────────────────────────────
     await page.waitForSelector("#vAgeLow", { timeout: 20000 });
 
     await page.click("#vAgeLow", { clickCount: 3 });
@@ -125,7 +109,7 @@ app.post("/random-case", async (req, res) => {
       page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 30000 })
     ]);
 
-    // ── STEP 5: Pick a random inmate ─────────────────────────────────────────
+    // ── STEP 4: Pick a random inmate ─────────────────────────────────────────
     await page.waitForSelector('input[name="btn1"]', { timeout: 20000 }).catch(() => {
       throw new Error("No results found for this age range.");
     });
@@ -141,7 +125,7 @@ app.post("/random-case", async (req, res) => {
       page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 30000 })
     ]);
 
-    // ── STEP 6: Parse profile ─────────────────────────────────────────────────
+    // ── STEP 5: Parse profile ─────────────────────────────────────────────────
     await page.waitForSelector("h4", { timeout: 15000 }).catch(() => {
       throw new Error("Inmate profile did not load.");
     });
@@ -185,7 +169,7 @@ app.post("/random-case", async (req, res) => {
       choices:     buildChoices(offense)
     };
 
-    console.log("Scraped:", offenderData.name, "|", offenderData.offense);
+    console.log("SUCCESS — Scraped:", offenderData.name, "|", offenderData.offense);
     res.json(offenderData);
 
   } catch (err) {
