@@ -152,7 +152,8 @@
 
     function loadOffender(data) {
     offenderName.textContent = data.name || "---";
-    img.src = data.image || "";
+    // img.src = data.image || "";
+    img.src = data.image ? `/proxy-image?url=${encodeURIComponent(data.image)}` : ""; 
     yobVar.textContent = data.yob || "---";
     raceVar.textContent = data.race || "---";
     genderVar.textContent = data.gender || "---";
