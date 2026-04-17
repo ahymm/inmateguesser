@@ -24,7 +24,21 @@ function buildChoices(correctOffense) {
   const wrong = shuffle(pool).slice(0, 3);
   return shuffle([correctOffense, ...wrong]);
 }
+app.get("/proxy-image", async (req, res) => {
+  const url = req.query.url;
+  if (!url) return res.status(400).send("No URL");
 
+  try {
+    const fetch = (await import("node-fetch")).default;
+    const response = await fetch(url);
+    const buffer = await response.buffer();
+    const contentType = response.headers.get("content-type") || "image/jpeg";
+    res.set("Content-Type", contentType);
+    res.send(buffer);
+  } catch (err) {
+    res.status(500).send("Image fetch failed");
+  }
+});
 app.post("/random-case", async (req, res) => {
   const { ageLow = 18, ageHigh = 90 } = req.body;
   let browser;
