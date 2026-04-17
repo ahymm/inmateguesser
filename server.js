@@ -60,7 +60,7 @@ app.post("/random-case", async (req, res) => {
     // ── STEP 2: Submit disclaimer form if present ─────────────────────────────
     const hasDisclaimer = await page.$('#submit2');
     if (hasDisclaimer) {
-      console.log("Disclaimer form mili — submit kar raha hoon...");
+      console.log("Disclaimer form found — submitting...");
       await Promise.all([
         page.click('#submit2'),
         page.waitForNavigation({ waitUntil: "networkidle2", timeout: 30000 })
@@ -119,10 +119,12 @@ app.post("/random-case", async (req, res) => {
         .filter((i, el) => $(el).text().includes(label))
         .first();
       if (!strong.length) return "";
-      return strong.parent().text()
-        .replace(strong.text(), "")
-        .replace(/\s+/g, " ")
-        .trim();
+      return strong[0].nextSibling?.nodeValue?.trim() ||
+        strong.parent().text()
+          .replace(strong.text(), "")
+          .split(/[A-Z]{3,}:/)[0]
+          .replace(/\s+/g, " ")
+          .trim();
     }
 
     const offense = getValue("MAJOR OFFENSE");
