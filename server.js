@@ -18,15 +18,8 @@ function shuffle(arr) {
 
 function buildChoices(correctOffense) {
   const pool = [
-    "BURGLARY",
-    "FRAUD",
-    "ROBBERY",
-    "AGGRAVATED ASSAULT",
-    "ARMED ROBBERY",
-    "MURDER",
-    "ATMPT MURDER",
-    "ARSON",
-    "KIDNAPPING"
+    "BURGLARY", "FRAUD", "ROBBERY", "AGGRAVATED ASSAULT",
+    "ARMED ROBBERY", "MURDER", "ATMPT MURDER", "ARSON", "KIDNAPPING"
   ].filter(x => x !== correctOffense);
   const wrong = shuffle(pool).slice(0, 3);
   return shuffle([correctOffense, ...wrong]);
@@ -37,15 +30,14 @@ app.post("/random-case", async (req, res) => {
   let browser;
 
   try {
-    // FIX 1: Add --no-sandbox and disable GPU for Render's Linux container
     browser = await puppeteer.launch({
       args: [
         ...chromium.args,
         "--no-sandbox",
         "--disable-setuid-sandbox",
-        "--disable-dev-shm-usage",   // Prevents /dev/shm OOM crashes on Render
+        "--disable-dev-shm-usage",
         "--disable-gpu",
-        "--single-process",           // Important for Render's limited environment
+        "--single-process",
       ],
       defaultViewport: chromium.defaultViewport,
       executablePath: await chromium.executablePath(),
@@ -54,20 +46,71 @@ app.post("/random-case", async (req, res) => {
 
     const page = await browser.newPage();
 
-    // FIX 2: Set a real user-agent to avoid bot detection / blank page responses
     await page.setUserAgent(
       "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
       "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     );
 
-    // FIX 3: Use domcontentloaded instead of networkidle2 — more reliable on slow servers
+    // ── STEP 1: Go to the search form ────────────────────────────────────────
     await page.goto(
       "https://services.gdc.ga.gov/GDC/OffenderQuery/jsp/OffQryForm.jsp",
       { waitUntil: "domcontentloaded", timeout: 30000 }
     );
 
-    // FIX 4: THE MAIN BUG — wait for the element to exist before clicking it
-    await page.waitForSelector("#vAgeLow", { timeout: 15000 });
+    const url1   = page.url();
+    const title1 = await page.title();
+    console.log("After goto — URL:", url1);
+    console.log("After goto — Title:", title1);
+
+    // ── STEP 2: Handle disclaimer page if present ─────────────────────────────
+    const disclaimerSelectors = [
+      'input[value="I Agree"]',
+      'input[value="Agree"]',
+      'input[value="Accept"]',
+      'input[value="Continue"]',
+    ];
+
+    let clickedDisclaimer = false;
+    for (const sel of disclaimerSelectors) {
+      try {
+        const el = await page.$(sel);
+        if (el) {
+          console.log("Disclaimer found, clicking:", sel);
+          await Promise.all([
+            el.click(),
+            page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 20000 })
+          ]);
+          clickedDisclaimer = true;
+          break;
+        }
+      } catch (_) {}
+    }
+
+    if (!clickedDisclaimer) {
+      console.log("No disclaimer found — proceeding.");
+    }
+
+    const url2   = page.url();
+    const title2 = await page.title();
+    console.log("Post-disclaimer — URL:", url2);
+    console.log("Post-disclaimer — Title:", title2);
+
+    // ── STEP 3: If still not on form page, navigate directly ─────────────────
+    if (!url2.includes("OffQryForm")) {
+      console.log("Not on form page, navigating directly...");
+      await page.goto(
+        "https://services.gdc.ga.gov/GDC/OffenderQuery/jsp/OffQryForm.jsp",
+        { waitUntil: "domcontentloaded", timeout: 30000 }
+      );
+      console.log("Re-navigate URL:", page.url());
+    }
+
+    // DEBUG: dump HTML snippet so we can see what's on the page
+    const debugHtml = await page.content();
+    console.log("Page HTML (first 2000 chars):\n", debugHtml.substring(0, 2000));
+
+    // ── STEP 4: Fill the search form ─────────────────────────────────────────
+    await page.waitForSelector("#vAgeLow", { timeout: 20000 });
 
     await page.click("#vAgeLow", { clickCount: 3 });
     await page.type("#vAgeLow", String(ageLow));
@@ -76,23 +119,19 @@ app.post("/random-case", async (req, res) => {
     await page.click("#vAgeHigh", { clickCount: 3 });
     await page.type("#vAgeHigh", String(ageHigh));
 
-    // FIX 5: Wait for the submit button before clicking it
     await page.waitForSelector("#NextButton2", { timeout: 10000 });
-
     await Promise.all([
       page.click("#NextButton2"),
       page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 30000 })
     ]);
 
-    // FIX 6: Wait for results to load, with a helpful error if none found
+    // ── STEP 5: Pick a random inmate ─────────────────────────────────────────
     await page.waitForSelector('input[name="btn1"]', { timeout: 20000 }).catch(() => {
-      throw new Error("No inmate results returned for that age range — the results page never loaded btn1 buttons.");
+      throw new Error("No results found for this age range.");
     });
 
     const buttons = await page.$$('input[name="btn1"]');
-    if (!buttons.length) {
-      throw new Error("Results page loaded but no inmate buttons found.");
-    }
+    if (!buttons.length) throw new Error("No inmate buttons found.");
 
     const randomIndex = Math.floor(Math.random() * buttons.length);
     console.log(`Found ${buttons.length} inmates. Selecting index: ${randomIndex}`);
@@ -102,21 +141,20 @@ app.post("/random-case", async (req, res) => {
       page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 30000 })
     ]);
 
-    // FIX 7: Wait for profile content before parsing
+    // ── STEP 6: Parse profile ─────────────────────────────────────────────────
     await page.waitForSelector("h4", { timeout: 15000 }).catch(() => {
-      throw new Error("Inmate profile page did not load h4 element in time.");
+      throw new Error("Inmate profile did not load.");
     });
 
     const html = await page.content();
-    const $ = cheerio.load(html);
+    const $    = cheerio.load(html);
 
     const imgSrc = $('img[alt="Image of the offender"]').attr("src") || "";
-    const image = imgSrc.startsWith("http")
+    const image  = imgSrc.startsWith("http")
       ? imgSrc
       : `https://services.gdc.ga.gov${imgSrc}`;
 
-    const nameRaw = $("h4").first().text().trim();
-    const name = nameRaw.replace("NAME:", "").trim();
+    const name = $("h4").first().text().trim().replace("NAME:", "").trim();
 
     function getValue(label) {
       const strong = $("strong.offender")
@@ -154,13 +192,9 @@ app.post("/random-case", async (req, res) => {
     console.error("Scrape error:", err.message);
     res.status(500).json({ error: "Scrape failed", detail: err.message });
   } finally {
-    if (browser) {
-      await browser.close();
-    }
+    if (browser) await browser.close();
   }
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-});
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
