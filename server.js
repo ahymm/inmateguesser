@@ -51,49 +51,23 @@ app.post("/random-case", async (req, res) => {
       "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     );
 
-    // ── STEP 1: Set the disclaimer cookie BEFORE navigating ───────────────────
-    // cookie_form.js checks for this cookie to show the search form
-    await page.setCookie({
-      name: "disclaimer",
-      value: "accepted",
-      domain: "services.gdc.ga.gov",
-      path: "/",
-    });
-    await page.setCookie({
-      name: "gdcCookie",
-      value: "true",
-      domain: "services.gdc.ga.gov",
-      path: "/",
-    });
-    await page.setCookie({
-      name: "GDCcookie",
-      value: "true",
-      domain: "services.gdc.ga.gov",
-      path: "/",
-    });
-
-    // ── STEP 2: Navigate and wait for JS to fully execute ─────────────────────
+    // ── STEP 1: Navigate to disclaimer page ──────────────────────────────────
     await page.goto(
       "https://services.gdc.ga.gov/GDC/OffenderQuery/jsp/OffQryForm.jsp",
       { waitUntil: "networkidle2", timeout: 30000 }
     );
 
-    // DEBUG: dump cookies and all input element IDs to find the real selectors
-    const cookies = await page.cookies();
-    console.log("All cookies:", JSON.stringify(cookies.map(c => ({ name: c.name, value: c.value }))));
+    // ── STEP 2: Submit disclaimer form if present ─────────────────────────────
+    const hasDisclaimer = await page.$('#submit2');
+    if (hasDisclaimer) {
+      console.log("Disclaimer form mili — submit kar raha hoon...");
+      await Promise.all([
+        page.click('#submit2'),
+        page.waitForNavigation({ waitUntil: "networkidle2", timeout: 30000 })
+      ]);
+    }
 
-    const inputs = await page.evaluate(() => {
-      return Array.from(document.querySelectorAll("input, select, textarea")).map(el => ({
-        tag:  el.tagName,
-        id:   el.id,
-        name: el.name,
-        type: el.type,
-        value: el.value,
-      }));
-    });
-    console.log("All form inputs found:", JSON.stringify(inputs, null, 2));
-
-    // ── STEP 3: Wait for age inputs ───────────────────────────────────────────
+    // ── STEP 3: Wait for search form and fill age range ───────────────────────
     await page.waitForSelector("#vAgeLow", { timeout: 20000 });
 
     await page.click("#vAgeLow", { clickCount: 3 });
@@ -109,7 +83,7 @@ app.post("/random-case", async (req, res) => {
       page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 30000 })
     ]);
 
-    // ── STEP 4: Pick a random inmate ─────────────────────────────────────────
+    // ── STEP 4: Pick a random inmate ──────────────────────────────────────────
     await page.waitForSelector('input[name="btn1"]', { timeout: 20000 }).catch(() => {
       throw new Error("No results found for this age range.");
     });
@@ -131,10 +105,10 @@ app.post("/random-case", async (req, res) => {
     });
 
     const html = await page.content();
-    const $    = cheerio.load(html);
+    const $ = cheerio.load(html);
 
     const imgSrc = $('img[alt="Image of the offender"]').attr("src") || "";
-    const image  = imgSrc.startsWith("http")
+    const image = imgSrc.startsWith("http")
       ? imgSrc
       : `https://services.gdc.ga.gov${imgSrc}`;
 
